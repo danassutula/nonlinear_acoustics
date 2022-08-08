@@ -23,22 +23,17 @@ Reference paper
 Karamalis, A., Wein, W., Navab, N. (2010). Fast Ultrasound Image Simulation 
 Using the Westervelt Equation. In: Jiang, T., Navab, N., Pluim, J.P.W., 
 Viergever, M.A. (eds) Medical Image Computing and Computer-Assisted Intervention 
-– MICCAI 2010. MICCAI 2010. Lecture Notes in Computer Science, vol 6361. 
+- MICCAI 2010. MICCAI 2010. Lecture Notes in Computer Science, vol 6361. 
 Springer, Berlin, Heidelberg. https://doi.org/10.1007/978-3-642-15705-9_30
 '''
 
 from dolfin import *
 
-from matplotlib.animation import FuncAnimation
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import animation
-
-import time
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Optimization options for the form compiler
 parameters["form_compiler"]["cpp_optimize"] = True
+parameters["form_compiler"]["cpp_optimize_flags"] = "-O2"
 
 if __name__ == "__main__":
 
@@ -52,21 +47,22 @@ if __name__ == "__main__":
     L = 0.2 # [m]
     H = 0.2 # [m]
 
-    space_and_time_refinement = 2
+    space_and_time_refinement = 0
     extra_time_refinement = 0 # 0, 1, 2, ...
-    
-    if 0:
+    line_style = ('-', '--', '-.', ':')[0]
+
+    if 1:
         # Test
         c = 1.0 # Speed of sound [m/s]
         ρ = 1.0 # Density of medium [kg/m^3]
-        δ = 1.0e-5 # Diffusivity of sound [m^2/s]
+        δ = 0.0 # Diffusivity of sound [m^2/s]
         β = 0.0 # Coefficient of nonlinearity [-]
     else:
         # Parameters of brain tissue
         c = 1500.0 # Speed of sound [m/s]
         ρ = 1100.0 # Density of medium [kg/m^3]
         δ = 4.5e-6 * 0 # Diffusivity of sound [m^2/s]
-        β = 0.0    # Coefficient of nonlinearity [-]
+        β = 6.0 * 1 # Coefficient of nonlinearity [-]
 
     # Time scaling constant: `t_real [s] = T [s] * t [-]`
     # (for example, time for a wave to do a round-trip)
@@ -76,24 +72,33 @@ if __name__ == "__main__":
     nx = ne
     ny = ne
 
-    element_degree = 1
+    hx = L / nx
+    hy = H / ny
+    he = min(hx, hy)
+
+    element_degree = 2
 
     t0 = 0.0
     tn = 1.0
 
+    # Time-step fraction (i.e. solve the discrete system at time `n+k`)
+    k = 1.0
+
     if element_degree == 1:
-        time_step_factor = 0.4 # < 0.5
+        time_step_factor = k * 1.00
     elif element_degree == 2:
-        time_step_factor = 0.2 # < 0.25
+        time_step_factor = k * 0.40
     elif element_degree == 3:
-        time_step_factor = 0.1 # < 0.125
+        time_step_factor = k * 0.15
+    elif element_degree == 4:
+        time_step_factor = k * 0.10
     else:
         raise NotImplementedError
 
-    he = min(L / nx, H / ny)
     dt = time_step_factor * he * (0.5 ** extra_time_refinement)
     nt = round((tn - t0) / dt)
     dt = (tn - t0) / nt
+    dt_k = k * dt
 
     mesh = RectangleMesh(
         Point(0.0, 0.0), Point(L, H), nx, ny, diagonal='crossed')
@@ -129,7 +134,7 @@ if __name__ == "__main__":
         dirichlet_boundary_ids = [0, 2]
     elif test_case == 2:
         dirichlet_boundary_ids = [3]
-        d2pdt2_bc = Expression('sin(omega*t)', t=0, omega=2*pi/tn * 3, degree=0)
+        d2pdt2_bc = Expression('cos(omega*t)', t=0, omega=2*pi/tn * 2, degree=0)
     elif test_case == 3:
         dirichlet_boundary_ids = []
     else:
@@ -192,14 +197,10 @@ if __name__ == "__main__":
     dpdt_0 = Function(V, name="dp/dt|n")
     d2pdt2_0 = Function(V, name="d2p/dt2|n")
 
-    k = 0.5 # Solve discrete PDE at half time-step
-
     #
     # Assume constant `d3pdt3` between time `n` and time `n+1`
     # (Implies `d2pdt2` varies linearly between `n` and `n+1`)
     #
-
-    dt_k = k * dt
 
     def d3pdt3_(k, d2pdt2_1):
         return (d2pdt2_1 - d2pdt2_0) / dt
@@ -282,9 +283,7 @@ if __name__ == "__main__":
     integrator = Integrator(t0, dt)
 
     def plot_cross_section(p, yvalue=H*0.5):
-        line_style = ('-', '--', '-.', ':')[extra_time_refinement % 4]
-        line_style = '-.'
-        xs = np.linspace(0, L, 301)
+        xs = np.linspace(0, L, 5*nx+1)
         ys = np.ones_like(xs) * yvalue
         ps = [p(x, y) for x, y in zip(xs, ys)]
         plt.plot(xs, ps, line_style)
@@ -302,21 +301,61 @@ if __name__ == "__main__":
     def progress_percent(i, nt, change=10):
         return int(i/nt * 100/change) * change
 
-    percent_old = -1
+    def play():
+        plt.close('animation')
 
-    if 1:
-        for i in range(nt):
+        fig, ax = plt.subplots(3,1, num="animation", figsize = (6, 8), sharex="col", tight_layout=True)
+        
+        for ax_ in ax:
+            ax_.clear()
+
+        lines = []
+
+        xs = np.linspace(0, L, 10*nx+1)
+        ys = np.ones_like(xs) * (H * 0.5)
+
+        zs = [p(x, y) for x, y in zip(xs, ys)]
+        lines.append(ax[0].plot(xs, zs, '.-r'))
+        
+        zs = [dpdt(x, y) for x, y in zip(xs, ys)]
+        lines.append(ax[1].plot(xs, zs, '.-b'))
+
+        zs = [d2pdt2(x, y) for x, y in zip(xs, ys)]
+        lines.append(ax[2].plot(xs, zs, '.-k'))
+
+        ax[0].set_title(f"t = {0:.3e}")
+
+        ax[0].set_ylabel('p')
+        ax[1].set_ylabel('dp/dt')
+        ax[2].set_ylabel('d2p/dt2')
+
+        ax[0].set_ylim(np.array(ax[1].get_ylim())*0.5)
+        ax[1].set_ylim(np.array(ax[1].get_ylim())*4)
+        ax[2].set_ylim(np.array(ax[2].get_ylim())*40)
+
+        # fig.tight_layout()
+        plt.show()
+
+        percent_old = -1
+
+        for i in range(1, nt+1):
             integrator.step()
 
-            percent = progress_percent(i+1, nt) 
+            percent = progress_percent(i, nt) 
             
             if percent > percent_old:
                 print(f"[{percent:3}% ]")
                 percent_old = percent
 
-            if i % (nt // 8) == 0:
-                plot_all()
-    
-    plot_all()
-    plt.show()
+            if True:
+                
+                lines[0][0].set_ydata([p(x, y) for x, y in zip(xs, ys)])
+                lines[1][0].set_ydata([dpdt(x, y) for x, y in zip(xs, ys)])
+                lines[2][0].set_ydata([d2pdt2(x, y) for x, y in zip(xs, ys)])
+
+                ti = i * dt
+                ax[0].set_title(f"t = {ti:.3e}")
+                plt.pause(0.01)
+
+    play()
 
