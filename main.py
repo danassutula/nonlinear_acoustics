@@ -47,9 +47,13 @@ if __name__ == "__main__":
     L = 0.2 # [m]
     H = 0.2 # [m]
 
-    space_and_time_refinement = 0
-    extra_time_refinement = 0 # 0, 1, 2, ...
-    line_style = ('-', '--', '-.', ':')[0]
+    space_and_time_refinement = 1
+    extra_time_refinement = 1 # 0, 1, 2, ...
+    line_style = ('-', '--', '-.', ':')[1]
+
+    #
+    # Usually need `extra_time_refinement > 0` when the non-linearity is big
+    # 
 
     if 1:
         # Test
@@ -59,10 +63,15 @@ if __name__ == "__main__":
         β = 0.0 # Coefficient of nonlinearity [-]
     else:
         # Parameters of brain tissue
-        c = 1500.0 # Speed of sound [m/s]
-        ρ = 1100.0 # Density of medium [kg/m^3]
+        c = 1500.0     # Speed of sound [m/s]
+        ρ = 1100.0     # Density of medium [kg/m^3]
         δ = 4.5e-6 * 0 # Diffusivity of sound [m^2/s]
-        β = 6.0 * 1 # Coefficient of nonlinearity [-]
+        β = 6.0    * 0 # Coefficient of nonlinearity [-]
+
+        if True:
+            # Scaling upto a point where it's impossible to solve
+            δ *= 1e4 
+            β *= 1e8
 
     # Time scaling constant: `t_real [s] = T [s] * t [-]`
     # (for example, time for a wave to do a round-trip)
@@ -134,7 +143,7 @@ if __name__ == "__main__":
         dirichlet_boundary_ids = [0, 2]
     elif test_case == 2:
         dirichlet_boundary_ids = [3]
-        d2pdt2_bc = Expression('cos(omega*t)', t=0, omega=2*pi/tn * 2, degree=0)
+        d2pdt2_bc = Expression('omega*t < 2*pi ? sin(omega*t) : 0.0', t=0, omega=2*pi/(tn/2), degree=0)
     elif test_case == 3:
         dirichlet_boundary_ids = []
     else:
@@ -246,6 +255,7 @@ if __name__ == "__main__":
     d2pdt2 = Function(V, name="d2p/dt2|n+1")
 
     # Expressions dependent on `d2pdt2`
+    d3pdt3_1 = d3pdt3_(1, d2pdt2_1=d2pdt2)
     dpdt_1 = dpdt_(1, d2pdt2_1=d2pdt2)
     p_1  = p_(1, d2pdt2_1=d2pdt2)
     
@@ -280,28 +290,46 @@ if __name__ == "__main__":
             
             self.nt += 1
 
+    # Sample points for cross-section animation
+    x_smp = np.linspace(0, L, 5*nx+1)
+    y_smp = np.ones_like(x_smp) * (H*0.5)
+
+    n_smp = min(100, nt)
+    t_smp = np.empty((n_smp,))
+
+    # Sampled values over time
+    p_smp = np.empty((n_smp, len(x_smp)))
+    dpdt_smp = np.empty((n_smp, len(x_smp)))
+    d2pdt2_smp = np.empty((n_smp, len(x_smp)))
+
+    def save_sampled_solutions(i_smp):
+        p_smp[i_smp, :] = [p(x, y) for x, y in zip(x_smp, y_smp)]
+        dpdt_smp[i_smp, :] = [dpdt(x, y) for x, y in zip(x_smp, y_smp)]
+        d2pdt2_smp[i_smp, :] = [d2pdt2(x, y) for x, y in zip(x_smp, y_smp)]
+
+    def progress_percent(i, nt):
+        return int(i/nt * 10) * 10
+
     integrator = Integrator(t0, dt)
 
-    def plot_cross_section(p, yvalue=H*0.5):
-        xs = np.linspace(0, L, 5*nx+1)
-        ys = np.ones_like(xs) * yvalue
-        ps = [p(x, y) for x, y in zip(xs, ys)]
-        plt.plot(xs, ps, line_style)
-
-    def plot_all():
-        plt.figure('p')
-        plot_cross_section(p, H*0.5)
-
-        plt.figure('dp/dt')
-        plot_cross_section(dpdt, H*0.5)
-
-        plt.figure('d2p/dt2')
-        plot_cross_section(d2pdt2, H*0.5)
+    i_smp = 0
+    t_smp[i_smp] = integrator.tn
+    save_sampled_solutions(i_smp)
     
-    def progress_percent(i, nt, change=10):
-        return int(i/nt * 100/change) * change
+    # Run time integration
+    for i in range(1, nt+1):
+        integrator.step()
+        
+        if i % int(nt / 10) == 0 or i == 1 or i == nt:
+            print(f"[{progress_percent(i, nt):3}% ]")
 
-    def play():
+        if i_smp < int(i / nt * n_smp):
+            t_smp[i_smp] = integrator.tn
+            save_sampled_solutions(i_smp)
+            i_smp += 1
+
+    def animate(pause=1/12):
+
         plt.close('animation')
 
         fig, ax = plt.subplots(3,1, num="animation", figsize = (6, 8), sharex="col", tight_layout=True)
@@ -309,53 +337,37 @@ if __name__ == "__main__":
         for ax_ in ax:
             ax_.clear()
 
-        lines = []
+        lines = [
+            ax[0].plot(x_smp, p_smp[0, :], line_style+'r'),
+            ax[1].plot(x_smp, dpdt_smp[0, :], line_style+'b'),
+            ax[2].plot(x_smp, d2pdt2_smp[0, :], line_style+'k'),
+        ]
 
-        xs = np.linspace(0, L, 10*nx+1)
-        ys = np.ones_like(xs) * (H * 0.5)
-
-        zs = [p(x, y) for x, y in zip(xs, ys)]
-        lines.append(ax[0].plot(xs, zs, '.-r'))
-        
-        zs = [dpdt(x, y) for x, y in zip(xs, ys)]
-        lines.append(ax[1].plot(xs, zs, '.-b'))
-
-        zs = [d2pdt2(x, y) for x, y in zip(xs, ys)]
-        lines.append(ax[2].plot(xs, zs, '.-k'))
-
-        ax[0].set_title(f"t = {0:.3e}")
+        ax[0].set_title(f"t = {0.0:.3e}")
 
         ax[0].set_ylabel('p')
         ax[1].set_ylabel('dp/dt')
         ax[2].set_ylabel('d2p/dt2')
 
-        ax[0].set_ylim(np.array(ax[1].get_ylim())*0.5)
-        ax[1].set_ylim(np.array(ax[1].get_ylim())*4)
-        ax[2].set_ylim(np.array(ax[2].get_ylim())*40)
+        y_min, y_max = p_smp.min(), p_smp.max()
+        y_mar = (y_max - y_min) * 0.05
+        ax[0].set_ylim([y_min-y_mar, y_max+y_mar])
 
-        # fig.tight_layout()
+        y_min, y_max = dpdt_smp.min(), dpdt_smp.max()
+        y_mar = (y_max - y_min) * 0.05
+        ax[1].set_ylim([y_min-y_mar, y_max+y_mar])
+
+        y_min, y_max = d2pdt2_smp.min(), d2pdt2_smp.max()
+        y_mar = (y_max - y_min) * 0.05
+        ax[2].set_ylim([y_min-y_mar, y_max+y_mar])
+
         plt.show()
 
-        percent_old = -1
+        for i in range(1, n_smp):
+            lines[0][0].set_ydata(p_smp[i,:])
+            lines[1][0].set_ydata(dpdt_smp[i,:])
+            lines[2][0].set_ydata(d2pdt2_smp[i,:])
+            ax[0].set_title(f"t = {t_smp[i]:.3e}")
+            plt.pause(pause)
 
-        for i in range(1, nt+1):
-            integrator.step()
-
-            percent = progress_percent(i, nt) 
-            
-            if percent > percent_old:
-                print(f"[{percent:3}% ]")
-                percent_old = percent
-
-            if True:
-                
-                lines[0][0].set_ydata([p(x, y) for x, y in zip(xs, ys)])
-                lines[1][0].set_ydata([dpdt(x, y) for x, y in zip(xs, ys)])
-                lines[2][0].set_ydata([d2pdt2(x, y) for x, y in zip(xs, ys)])
-
-                ti = i * dt
-                ax[0].set_title(f"t = {ti:.3e}")
-                plt.pause(0.01)
-
-    play()
-
+    animate()
