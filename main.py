@@ -47,9 +47,9 @@ if __name__ == "__main__":
     L = 0.2 # [m]
     H = 0.2 # [m]
 
-    space_and_time_refinement = 1
-    extra_time_refinement = 1 # 0, 1, 2, ...
-    line_style = ('-', '--', '-.', ':')[1]
+    space_and_time_refinement = 0
+    extra_time_refinement = 0 # 0, 1, 2, ...
+    line_style = ('.-', '-', '--', '-.', ':')[1]
 
     #
     # Usually need `extra_time_refinement > 0` when the non-linearity is big
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     tn = 1.0
 
     # Time-step fraction (i.e. solve the discrete system at time `n+k`)
-    k = 1.0
+    k = 1.0 # 0.5 <= k <= 1.0
 
     if element_degree == 1:
         time_step_factor = k * 1.00
@@ -143,7 +143,6 @@ if __name__ == "__main__":
         dirichlet_boundary_ids = [0, 2]
     elif test_case == 2:
         dirichlet_boundary_ids = [3]
-        d2pdt2_bc = Expression('omega*t < 2*pi ? sin(omega*t) : 0.0', t=0, omega=2*pi/(tn/2), degree=0)
     elif test_case == 3:
         dirichlet_boundary_ids = []
     else:
@@ -166,41 +165,32 @@ if __name__ == "__main__":
     # Neumann boundary integration measure
     ds = ds(neumann_boundary_marker, domain=mesh, subdomain_data=boundary_markers)
 
-    source_function_id = 0
+    source_function_id = 1
 
     if source_function_id == 0:
-        g = Expression('value', value=0.0, degree=0)
+        g = Expression('value', value=0.0, t=0, degree=0)
     elif source_function_id == 1:
         g = Expression(
             '0.25 * max * (1.0 - cos(2*pi*x[0]/L)) * (1.0 - cos(2*pi*x[1]/H))',
-            L=Constant(L), H=Constant(H), max=1.0, degree=3)
-    elif source_function_id == 2:
-        g = Expression(
-            '0.25 * max * (1.0 - cos(2*pi*x[0]/L)) * (1.0 - cos(2*pi*x[1]/H)) * sin(phase+omega*t)',
-            L=Constant(L), H=Constant(H), max=1.0, phase=0, omega=2*pi/tn, t=0.0, degree=3)
+            L=Constant(L), H=Constant(H), max=1.0, t=0, degree=3)
     else:
         raise NotImplementedError
-
-    def update_boundary_conditions_for_time(t):
-        d2pdt2_bc.t = t
-        dpdn_bc.t = t
-        g.t = t
 
     # Initial conditions
     p_ic = Function(V, name="p|0")
     dpdt_ic = Function(V, name="dpdt|0")
     d2pdt2_ic = Function(V, name="d2pdt2|0")
 
+    if 1:
+        p_ic.assign(Constant(1.0))
+        dpdt_ic.assign(interpolate(Expression(
+            '0.25 * max * (1.0 - cos(2*pi*x[0]/L)) * (1.0 - cos(2*pi*x[1]/H))',
+            L=Constant(L), H=Constant(H), max=-1.0, degree=3), V))
+
     bcs = []
 
     bcs.append(DirichletBC(V, d2pdt2_bc, boundary_markers, dirichlet_boundary_marker))
     # fixed_dofs = np.array(list(bcs[0].get_boundary_values())) # Not used
-
-    v = TestFunction(V)
-
-    p = Function(V, name="p|n+1")
-    dpdt = Function(V, name="dp/dt|n+1")
-    d2pdt2 = TrialFunction(V) # "d2p/dt2|n+1"
 
     p_0 = Function(V, name="p|n")
     dpdt_0 = Function(V, name="dp/dt|n")
@@ -224,10 +214,12 @@ if __name__ == "__main__":
         return p_0 + dpdt_0*(k*dt) + (d2pdt2_0*((3*k+(1-k)**3-1)/3) + d2pdt2_1*(k**3/3))*(dt**2/2)
 
     # Approximations at an intermediate time step `n+k`
-    p_k = p_(k, d2pdt2_1=d2pdt2)
-    dpdt_k = dpdt_(k, d2pdt2_1=d2pdt2)
-    d2pdt2_k = d2pdt2_(k, d2pdt2_1=d2pdt2)
+
+    d2pdt2 = TrialFunction(V) # "d2pdt2|n+1" 
     d3pdt3_k = d3pdt3_(k, d2pdt2_1=d2pdt2)
+    d2pdt2_k = d2pdt2_(k, d2pdt2_1=d2pdt2)
+    dpdt_k = dpdt_(k, d2pdt2_1=d2pdt2)
+    p_k = p_(k, d2pdt2_1=d2pdt2)
 
     # Linearize $d^2/dt^2 (p^2) = 2 (p d^2p/dt^2 + (dp/dt)^2)$
     p_d2pdt2_k = p_0*d2pdt2_k + (p_k - p_0)*d2pdt2_0
@@ -240,6 +232,8 @@ if __name__ == "__main__":
     C3 = Constant(β / (c**2 * ρ))
     C4 = Constant(T**2)
 
+    v = TestFunction(V)
+
     # Weak form
     F_k = (C0 * dpdn_bc * v * ds
          - C0 * inner(grad(p_k), grad(v)) * dx
@@ -251,19 +245,27 @@ if __name__ == "__main__":
     a = lhs(F_k) # Bilinear form
     l = rhs(F_k) # Linear form
 
-    # The unknown function at time step `n+1`
+    p = Function(V, name="p|n+1")
+    dpdt = Function(V, name="dp/dt|n+1")
     d2pdt2 = Function(V, name="d2p/dt2|n+1")
 
-    # Expressions dependent on `d2pdt2`
-    d3pdt3_1 = d3pdt3_(1, d2pdt2_1=d2pdt2)
     dpdt_1 = dpdt_(1, d2pdt2_1=d2pdt2)
-    p_1  = p_(1, d2pdt2_1=d2pdt2)
+    p_1 = p_(1, d2pdt2_1=d2pdt2)
     
     # Assign initial conditions
     p.assign(p_ic)
     dpdt.assign(dpdt_ic)
     d2pdt2.assign(d2pdt2_ic)
 
+    def update_dirichlet_bcs(t):
+        d2pdt2_bc.t = t
+
+    def update_neumann_bcs(t):
+        dpdn_bc.t = t
+
+    def update_source_term(t):
+        g.t = t
+        
     class Integrator:
         def __init__(self, t0, dt):
             self.t0 = t0
@@ -279,23 +281,31 @@ if __name__ == "__main__":
             dpdt_0.vector()[:] = dpdt.vector()
             d2pdt2_0.vector()[:] = d2pdt2.vector()
 
-            t_k = self.t0 + self.nt*self.dt + dt_k
-            update_boundary_conditions_for_time(t_k)
+            tn = self.t0 + self.nt * self.dt
+            
+            update_dirichlet_bcs(tn + dt)
+            update_neumann_bcs(tn + dt_k)
+            update_source_term(tn + dt_k)
 
             A, b = assemble_system(a, l, bcs)
             solve(A, d2pdt2.vector(), b)
-            
+
             dpdt.assign(dpdt_1)
             p.assign(p_1)
             
             self.nt += 1
 
+    integrator = Integrator(t0, dt)
+
+    #
     # Sample points for cross-section animation
-    x_smp = np.linspace(0, L, 5*nx+1)
-    y_smp = np.ones_like(x_smp) * (H*0.5)
+    #
 
     n_smp = min(100, nt)
     t_smp = np.empty((n_smp,))
+
+    x_smp = np.linspace(0, L, 6*nx+1)
+    y_smp = np.ones_like(x_smp) * (H*0.5)
 
     # Sampled values over time
     p_smp = np.empty((n_smp, len(x_smp)))
@@ -307,67 +317,79 @@ if __name__ == "__main__":
         dpdt_smp[i_smp, :] = [dpdt(x, y) for x, y in zip(x_smp, y_smp)]
         d2pdt2_smp[i_smp, :] = [d2pdt2(x, y) for x, y in zip(x_smp, y_smp)]
 
-    def progress_percent(i, nt):
-        return int(i/nt * 10) * 10
-
-    integrator = Integrator(t0, dt)
-
     i_smp = 0
     t_smp[i_smp] = integrator.tn
     save_sampled_solutions(i_smp)
     
-    # Run time integration
+    report_period = max(int(nt / 10), 1)
+
     for i in range(1, nt+1):
         integrator.step()
         
-        if i % int(nt / 10) == 0 or i == 1 or i == nt:
-            print(f"[{progress_percent(i, nt):3}% ]")
+        if i % report_period == 0 or i == nt:
+            print(f"[{int(i/nt*100):3}% ]")
 
-        if i_smp < int(i / nt * n_smp):
+        if i_smp < int(i / nt * (n_smp-1)):
+            i_smp += 1
             t_smp[i_smp] = integrator.tn
             save_sampled_solutions(i_smp)
-            i_smp += 1
+        
+    def animate_1d(p = True, dpdt = True, d2pdt2 = True, figname="animation (1D)"):
 
-    def animate(pause=1/12):
+        plt.close(figname)
 
-        plt.close('animation')
+        num_plots = int(p) + int(dpdt) + int(d2pdt2)
 
-        fig, ax = plt.subplots(3,1, num="animation", figsize = (6, 8), sharex="col", tight_layout=True)
+        if num_plots == 0:
+            return
+
+        fig, ax = plt.subplots(
+            num_plots, 1, num=figname, figsize = (6, 8), sharex="col", tight_layout=True)
         
         for ax_ in ax:
             ax_.clear()
 
-        lines = [
-            ax[0].plot(x_smp, p_smp[0, :], line_style+'r'),
-            ax[1].plot(x_smp, dpdt_smp[0, :], line_style+'b'),
-            ax[2].plot(x_smp, d2pdt2_smp[0, :], line_style+'k'),
-        ]
+        lines = []
 
-        ax[0].set_title(f"t = {0.0:.3e}")
-
-        ax[0].set_ylabel('p')
-        ax[1].set_ylabel('dp/dt')
-        ax[2].set_ylabel('d2p/dt2')
-
-        y_min, y_max = p_smp.min(), p_smp.max()
-        y_mar = (y_max - y_min) * 0.05
-        ax[0].set_ylim([y_min-y_mar, y_max+y_mar])
-
-        y_min, y_max = dpdt_smp.min(), dpdt_smp.max()
-        y_mar = (y_max - y_min) * 0.05
-        ax[1].set_ylim([y_min-y_mar, y_max+y_mar])
-
-        y_min, y_max = d2pdt2_smp.min(), d2pdt2_smp.max()
-        y_mar = (y_max - y_min) * 0.05
-        ax[2].set_ylim([y_min-y_mar, y_max+y_mar])
-
+        i = 0
+        if p:
+            lines.append(ax[i].plot(x_smp, p_smp[0, :], line_style+'r'))
+            y_min, y_max = p_smp.min(), p_smp.max()
+            y_mar = (y_max - y_min) * 0.05
+            ax[i].set_ylim([y_min-y_mar, y_max+y_mar])
+            ax[i].set_ylabel('p')
+            i += 1
+        if dpdt: 
+            lines.append(ax[i].plot(x_smp, dpdt_smp[0, :], line_style+'b'))
+            y_min, y_max = dpdt_smp.min(), dpdt_smp.max()
+            y_mar = (y_max - y_min) * 0.05
+            ax[i].set_ylim([y_min-y_mar, y_max+y_mar])
+            ax[i].set_ylabel('dp/dt')
+            i += 1
+        if d2pdt2:
+            lines.append(ax[i].plot(x_smp, d2pdt2_smp[0, :], line_style+'k'))
+            y_min, y_max = d2pdt2_smp.min(), d2pdt2_smp.max()
+            y_mar = (y_max - y_min) * 0.05
+            ax[i].set_ylim([y_min-y_mar, y_max+y_mar])
+            ax[i].set_ylabel('d2p/dt2')
+            i += 1
+        
+        ax[0].set_title(f"t = {(t_smp[0]*T):.3e} (sec.)")
         plt.show()
 
         for i in range(1, n_smp):
-            lines[0][0].set_ydata(p_smp[i,:])
-            lines[1][0].set_ydata(dpdt_smp[i,:])
-            lines[2][0].set_ydata(d2pdt2_smp[i,:])
-            ax[0].set_title(f"t = {t_smp[i]:.3e}")
-            plt.pause(pause)
+            j = 0
+            
+            if p:
+                lines[j][0].set_ydata(p_smp[i,:])
+                j += 1
+            if dpdt:
+                lines[j][0].set_ydata(dpdt_smp[i,:])
+                j += 1
+            if d2pdt2:
+                lines[j][0].set_ydata(d2pdt2_smp[i,:])
 
-    animate()
+            ax[0].set_title(f"t = {(t_smp[i]*T):.3e} (sec.)")
+            plt.pause(0.050)
+
+    animate_1d()
