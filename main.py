@@ -1,15 +1,16 @@
 '''
 The propagation of sound waves can be modeled by the Westervelt equation
 
-(C0 ∇^2 - C1 d^2/dt^2 + C2 d^3/dt^3) p + C3 d^2/dt^2 p^2 + C4 s = 0,
+(C0 ∇^2 - C5 d/dt - C1 d^2/dt^2 + C2 d^3/dt^3) p + C3 d^2/dt^2 p^2 + C4 s = 0,
 
 where
 
-C0 = c^2 * T^2
+C0 = c^2 T^2
 C1 = 1
 C2 = δ / c^2 / T 
 C3 = β / c^2 / ρ
 C4 = T^2
+C5 = b T
 
 and 
 
@@ -56,16 +57,16 @@ if __name__ == "__main__":
     # 
 
     if 1:
-        # Test
         c = 1.0 # Speed of sound [m/s]
         ρ = 1.0 # Density of medium [kg/m^3]
         δ = 0.0 # Diffusivity of sound [m^2/s]
         β = 0.0 # Coefficient of nonlinearity [-]
-
-        # NOTE: Seems like `δ` eventually causes instabilities in 1D problems.
+        b = 0.0 # Damping coefficient
 
         if 1:
             β = 1e-4 # Scaled upto instability
+
+        # NOTE: `δ > 0` eventually causes instability
 
     else:
         # Parameters of brain tissue
@@ -73,6 +74,7 @@ if __name__ == "__main__":
         ρ = 1100.0 # Density of medium [kg/m^3]
         δ = 4.5e-6 # Diffusivity of sound [m^2/s] (NOTE: An imperceivable effect)
         β = 6.0    # Coefficient of nonlinearity [-]
+        b = 0.0    # Damping coefficient
 
         if 1:
             β = 1e12 # Scaled upto instability
@@ -221,12 +223,14 @@ if __name__ == "__main__":
     C2 = Constant(δ / (c**2 * T))
     C3 = Constant(β / (c**2 * ρ))
     C4 = Constant(T**2)
+    C5 = Constant(b*T)
 
     v = TestFunction(V)
 
     # Weak form
     F_k = (C0 * dpdn_bc * v * ds
          - C0 * inner(grad(p_k), grad(v)) * dx
+         - C5 * dpdt_k * v * dx
          - C1 * d2pdt2_k * v * dx
          + C2 * d3pdt3_k * v * dx
          + C3 * d2p2dt2_k * v * dx
