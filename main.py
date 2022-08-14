@@ -47,7 +47,7 @@ if __name__ == "__main__":
     L = 0.2 # [m]
     H = 0.2 # [m]
 
-    space_time_refinement = 2
+    space_time_refinement = 1
     extra_time_refinement = 0 # 0, 1, 2, ...
     line_style = ('.-', '-', '--', '-.', ':')[1]
 
@@ -61,23 +61,28 @@ if __name__ == "__main__":
         ρ = 1.0 # Density of medium [kg/m^3]
         δ = 0.0 # Diffusivity of sound [m^2/s]
         β = 0.0 # Coefficient of nonlinearity [-]
+
+        # NOTE: Seems like `δ` eventually causes instabilities in 1D problems.
+
+        if 1:
+            β = 1e-4 # Scaled upto instability
+
     else:
         # Parameters of brain tissue
-        c = 1500.0     # Speed of sound [m/s]
-        ρ = 1100.0     # Density of medium [kg/m^3]
-        δ = 4.5e-6 * 1 # Diffusivity of sound [m^2/s]
-        β = 6.0    * 1 # Coefficient of nonlinearity [-]
+        c = 1500.0 # Speed of sound [m/s]
+        ρ = 1100.0 # Density of medium [kg/m^3]
+        δ = 4.5e-6 # Diffusivity of sound [m^2/s] (NOTE: An imperceivable effect)
+        β = 6.0    # Coefficient of nonlinearity [-]
 
-        if True:
-            # Scaling upto a point where it's impossible to solve
-            δ *= 1 
-            β *= 1
+        if 1:
+            β = 1e12 # Scaled upto instability
+            # NOTE: Need `space_time_refinement = 2`
 
     # Time scaling constant: `t_real [s] = T [s] * t [-]`
     # (for example, time for a wave to do a round-trip)
     T = 2.0 * max(L, H) / c
 
-    ne = 8 * 2 ** space_time_refinement
+    ne = 16 * (2 ** space_time_refinement)
     nx = ne
     ny = ne
 
@@ -286,7 +291,7 @@ if __name__ == "__main__":
     # Sample points for cross-section animation
     #
 
-    n_smp = min(200, nt)
+    n_smp = min(100, nt)
     t_smp = np.zeros((n_smp,))
 
     x_smp = np.linspace(0, L, 4*nx+1)
