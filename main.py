@@ -1,7 +1,7 @@
 '''
 The propagation of sound waves can be modeled by the Westervelt equation
 
-(C0 ∇^2 - C5 d/dt - C1 d^2/dt^2 + C2 d^3/dt^3) p + C3 d^2/dt^2 p^2 + C4 s = 0,
+(C0 ∇^2 - C5 d/dt - C1 d^2/dt^2 + C2 d^3/dt^3) p + C3 d^2/dt^2 p^2 + C4 g = 0,
 
 where
 
@@ -49,9 +49,19 @@ if __name__ == "__main__":
     L = 0.2 # [m]
     H = 0.2 # [m]
 
-    space_time_refinement = 1
+    space_time_refinement = 0
     extra_time_refinement = 0 # 0, 1, 2, ...
     line_style = ('.-', '-', '--', '-.', ':')[1]
+
+    with_animation_1d = True
+    with_animation_2d = False
+
+    if with_animation_1d or with_animation_2d:
+        require_solution_sampling = True
+    else:
+        require_solution_sampling = False
+
+    # require_solution_sampling = True # override
 
     #
     # Usually need `extra_time_refinement > 0` when the non-linearity is big
@@ -66,8 +76,6 @@ if __name__ == "__main__":
 
         if 1:
             β = 1e-4 # Scaled upto instability
-
-        # NOTE: `δ > 0` eventually causes instability
 
     else:
         # Parameters of brain tissue
@@ -93,7 +101,7 @@ if __name__ == "__main__":
     hy = H / ny
     he = min(hx, hy)
 
-    element_degree = 2
+    element_degree = 3
 
     t0 = 0.0
     tn = 1.0
@@ -134,24 +142,23 @@ if __name__ == "__main__":
 
     boundary_markers = MeshFunction('size_t', mesh, DIM-1)
     boundary_ids = tuple(range(len(boundary_subdomains)))
-
-    boundary_markers.set_all(9000) # Initialization
+    boundary_markers.set_all(9000) # Some unique value
 
     for i in boundary_ids:
         boundary_subdomains[i].mark(boundary_markers, i)
 
     # Initial conditions
-    p_ic = Function(V, name="p|0")
-    dpdt_ic = Function(V, name="dpdt|0")
-    d2pdt2_ic = Function(V, name="d2pdt2|0")
+    p_ic = Function(V)
+    dpdt_ic = Function(V)
+    d2pdt2_ic = Function(V)
 
     # Dirichlet boundary conditions
     d2pdt2_bc = Expression('0.0', t=0, degree=0) 
-
     # Neumann boundary conditions
     dpdn_bc = Expression('0.0', t=0, degree=0) 
 
-    boundary_conditions_id = 3
+    # Dirichlet and Neumann BC's
+    boundary_conditions_id = 2
 
     if boundary_conditions_id == 0:
         dirichlet_boundary_ids = (0, 1, 2, 3) # 0 - all edges fixed
@@ -164,37 +171,51 @@ if __name__ == "__main__":
     else:
         raise NotImplementedError
     
+    bcs = []
+    for i in dirichlet_boundary_ids:
+        bcs.append(DirichletBC(V, d2pdt2_bc, boundary_markers, i))
+
+    # Boundary id's not in `dirichlet_boundary_ids` must be in `neumann_boundary_ids`
     neumann_boundary_ids = tuple(set(boundary_ids).difference(dirichlet_boundary_ids))
-    source_boundary_ids = (3,) # left boundary
+
+    #
+    # NOTE: Normaly, the source function is defined inside the domain, but
+    # it is also possible to define it just on the boundary. In this case, 
+    # the usual integration measure `dx` needs to be changed to `ds`.
+    #
+
+    source_function_id = 1
+    source_boundary_ids = ()
+
+    if source_function_id == 0:
+        g = Expression('value', value=0.0, t=0, degree=0)
+    elif source_function_id == 1:
+        g = Expression(
+            't < 2*pi/omega ? value * sin(omega*t) '
+            '* pow(t * (2*pi/omega - t) * pow(omega/pi, 2), 2) : 0.0', # <- Smoothing weight
+            L=Constant(L), H=Constant(H), t=0, omega=2*np.pi/(tn*0.2), value=1e4, degree=0)
+        source_boundary_ids = (3,) # Boundary id where `g` is defined, i.e. left boundary
+    elif source_function_id == 2:
+        g = Expression(
+            't < 2*pi/omega ? value * sin(pi*x[1]/H) * sin(omega*t) '
+            '* pow(t * (2*pi/omega - t) * pow(omega/pi, 2), 2) : 0.0', # <- Smoothing weight
+            L=Constant(L), H=Constant(H), t=0, omega=2*np.pi/(tn*0.2), value=1e4, degree=0)
+        source_boundary_ids = (3,) # Boundary id where `g` is defined, i.e. left boundary
+    else:
+        raise NotImplementedError
 
     assert all(i in neumann_boundary_ids for i in source_boundary_ids)
 
     ds_neumann = ds(subdomain_id=neumann_boundary_ids, domain=mesh, subdomain_data=boundary_markers) 
     ds_source = ds(subdomain_id=source_boundary_ids, domain=mesh, subdomain_data=boundary_markers) 
     
-    source_function_id = 1
+    # Approximations at the previous time step `n`
 
-    if source_function_id == 0:
-        g = Expression('value', value=0.0, t=0, degree=0)
-    elif source_function_id == 1:
-        g = Expression(
-            't < 2*pi/omega ? value * sin(omega*t) * pow(t * (2*pi/omega - t) * pow(omega/pi, 2), 2) : 0.0',
-            L=Constant(L), H=Constant(H), t=0, omega=2*np.pi/0.2, value=1e4, degree=0)
-    else:
-        raise NotImplementedError
+    p_0 = Function(V)
+    dpdt_0 = Function(V)
+    d2pdt2_0 = Function(V)
 
-    bcs = []
-    for i in dirichlet_boundary_ids:
-        bcs.append(DirichletBC(V, d2pdt2_bc, boundary_markers, i))
-
-    p_0 = Function(V, name="p|n")
-    dpdt_0 = Function(V, name="dp/dt|n")
-    d2pdt2_0 = Function(V, name="d2p/dt2|n")
-
-    #
-    # Assume constant `d3pdt3` between time `n` and time `n+1`
-    # (Implies `d2pdt2` varies linearly between `n` and `n+1`)
-    #
+    # Approximations at an intermediate time step `n+k`
 
     def d3pdt3_(k, d2pdt2_1):
         return (d2pdt2_1 - d2pdt2_0) / dt
@@ -208,9 +229,9 @@ if __name__ == "__main__":
     def p_(k, d2pdt2_1):
         return p_0 + dpdt_0*(k*dt) + (d2pdt2_0*((3*k+(1-k)**3-1)/3) + d2pdt2_1*(k**3/3))*(dt**2/2)
 
-    # Approximations at an intermediate time step `n+k`
+    # Approximation at `n+1`
+    d2pdt2 = TrialFunction(V)
 
-    d2pdt2 = TrialFunction(V) # "d2pdt2|n+1" 
     d3pdt3_k = d3pdt3_(k, d2pdt2_1=d2pdt2)
     d2pdt2_k = d2pdt2_(k, d2pdt2_1=d2pdt2)
     dpdt_k = dpdt_(k, d2pdt2_1=d2pdt2)
@@ -242,18 +263,19 @@ if __name__ == "__main__":
     a = lhs(F_k) # Bilinear form
     l = rhs(F_k) # Linear form
 
-    p = Function(V, name="p|n+1")
-    dpdt = Function(V, name="dp/dt|n+1")
-    d2pdt2 = Function(V, name="d2p/dt2|n+1")
+    # Approximations at the next time step `n+1`
 
-    dpdt_1 = dpdt_(1, d2pdt2_1=d2pdt2)
-    p_1 = p_(1, d2pdt2_1=d2pdt2)
-    
-    # Assign initial conditions
+    p = Function(V)
+    dpdt = Function(V)
+    d2pdt2 = Function(V)
+
     p.assign(p_ic)
     dpdt.assign(dpdt_ic)
     d2pdt2.assign(d2pdt2_ic)
-
+ 
+    dpdt_1 = dpdt_(1, d2pdt2_1=d2pdt2)
+    p_1 = p_(1, d2pdt2_1=d2pdt2)
+    
     def update_dirichlet_bcs(t):
         d2pdt2_bc.t = t
 
@@ -262,7 +284,7 @@ if __name__ == "__main__":
 
     def update_source_term(t):
         g.t = t
-        
+
     class Integrator:
         def __init__(self, t0, dt):
             self.t0 = t0
@@ -270,7 +292,7 @@ if __name__ == "__main__":
             self.nt = 0
 
         @property
-        def tn(self):
+        def t(self):
             return self.t0 + self.nt * self.dt
 
         def step(self):
@@ -298,106 +320,158 @@ if __name__ == "__main__":
     # Sample points for cross-section animation
     #
 
-    n_smp = min(100, nt)
-    t_smp = np.zeros((n_smp,))
+    if require_solution_sampling:
+        
+        n_smp = min(100, nt)
 
-    x_smp = np.linspace(0, L, 4*nx+1)
-    y_smp = np.ones_like(x_smp) * (H*0.5)
+        t_smp = np.zeros((n_smp,))
+        x_smp = np.linspace(0, L, 4*nx+1)
+        y_smp = np.ones_like(x_smp) * (H*0.5)
 
-    # Sampled values over time
-    p_smp = np.zeros((n_smp, len(x_smp)))
-    dpdt_smp = np.zeros((n_smp, len(x_smp)))
-    d2pdt2_smp = np.zeros((n_smp, len(x_smp)))
+        p_smp_1d = np.zeros((n_smp, len(x_smp)))
+        dpdt_smp_1d = np.zeros((n_smp, len(x_smp)))
+        d2pdt2_smp_1d = np.zeros((n_smp, len(x_smp)))
+        
+        p_smp_2d = []
+        
+        i_smp = -1
 
-    def save_sampled_solutions(i_smp):
-        p_smp[i_smp, :] = [p(x, y) for x, y in zip(x_smp, y_smp)]
-        dpdt_smp[i_smp, :] = [dpdt(x, y) for x, y in zip(x_smp, y_smp)]
-        d2pdt2_smp[i_smp, :] = [d2pdt2(x, y) for x, y in zip(x_smp, y_smp)]
+        def sample_solutions(i):
+            global i_smp
+            if i_smp < int(i / nt * (n_smp-1)):
+                i_smp += 1
+                t_smp[i_smp] = integrator.t
+                p_smp_1d[i_smp, :] = [p(x, y) for x, y in zip(x_smp, y_smp)]
+                dpdt_smp_1d[i_smp, :] = [dpdt(x, y) for x, y in zip(x_smp, y_smp)]
+                d2pdt2_smp_1d[i_smp, :] = [d2pdt2(x, y) for x, y in zip(x_smp, y_smp)]
+                p_smp_2d.append(p.vector().get_local())
 
-    i_smp = 0
-    t_smp[i_smp] = integrator.tn
-    save_sampled_solutions(i_smp)
-    
-    report_period = max(int(nt / 10), 1)
+    else:
+        def sample_solutions(*args, **kwargs):
+            return
+
+    report_interval = max(int(nt / 10), 1)
+
+    if require_solution_sampling:
+        sample_solutions(0)
 
     for i in range(1, nt+1):
         integrator.step()
         
-        if i % report_period == 0 or i == nt:
+        if i % report_interval == 0 or i == nt:
             print(f"[{int(i/nt*100):3}% ]")
 
         if np.isnan(d2pdt2.vector()[0]):
             print("SOLUTION DIVERGED")
-            n_smp = i_smp + 1
             break
 
-        if i_smp < int(i / nt * (n_smp-1)):
-            i_smp += 1
-            t_smp[i_smp] = integrator.tn
-            save_sampled_solutions(i_smp)
-    
-    def animate_1d(n_smp=n_smp, p=True, dpdt=True, d2pdt2=True, figname="animation (1D)"):
+        if require_solution_sampling:
+            sample_solutions(i)
 
-        plt.close(figname)
+    if require_solution_sampling:
 
-        num_plots = int(p) + int(dpdt) + int(d2pdt2)
+        figname = ("animation-1D "
+                f"[degree={element_degree}]"
+                f"[space-time={space_time_refinement}]"
+                f"[extra-time={extra_time_refinement}]"
+                f"[k={k}]")
 
-        if num_plots == 0:
-            return
-
-        fig, ax = plt.subplots(
-            num_plots, 1, num=figname, figsize = (6, 8), sharex="col", tight_layout=True)
-        
-        for ax_ in ax:
-            ax_.clear()
-
-        lines = []
-
-        i = 0
-        if p:
-            lines.append(ax[i].plot(x_smp, p_smp[0, :], line_style+'r'))
-            y_min, y_max = p_smp[:n_smp,:].min(), p_smp[:n_smp,:].max()
-            y_mar = (y_max - y_min) * 0.05
-            ax[i].set_ylim([y_min-y_mar, y_max+y_mar])
-            ax[i].set_ylabel('p')
-            i += 1
-        if dpdt: 
-            lines.append(ax[i].plot(x_smp, dpdt_smp[0, :], line_style+'b'))
-            y_min, y_max = dpdt_smp[:n_smp,:].min(), dpdt_smp[:n_smp,:].max()
-            y_mar = (y_max - y_min) * 0.05
-            ax[i].set_ylim([y_min-y_mar, y_max+y_mar])
-            ax[i].set_ylabel('dp/dt')
-            i += 1
-        if d2pdt2:
-            lines.append(ax[i].plot(x_smp, d2pdt2_smp[0, :], line_style+'k'))
-            y_min, y_max = d2pdt2_smp[:n_smp,:].min(), d2pdt2_smp[:n_smp,:].max()
-            y_mar = (y_max - y_min) * 0.05
-            ax[i].set_ylim([y_min-y_mar, y_max+y_mar])
-            ax[i].set_ylabel('d2p/dt2')
-            i += 1
-        
-        ax[0].set_title(f"t = {t_smp[0]:.3e}")
-        plt.show()
-
-        for i in range(1, n_smp):
-            j = 0
+        def animate_1d(figname=figname, p=True, dpdt=True, d2pdt2=True, n_smp=i_smp+1):
             
+            assert n_smp <= t_smp.size
+
+            plt.close(figname)
+
+            num_plots = int(p) + int(dpdt) + int(d2pdt2)
+
+            if num_plots == 0:
+                return
+
+            fig, ax = plt.subplots(
+                num_plots, 1, num=figname, figsize = (6, 8), sharex="col", tight_layout=True)
+            
+            for ax_ in ax:
+                ax_.clear()
+
+            lines = []
+
+            i = 0
             if p:
-                lines[j][0].set_ydata(p_smp[i,:])
-                j += 1
-            if dpdt:
-                lines[j][0].set_ydata(dpdt_smp[i,:])
-                j += 1
+                lines.append(ax[i].plot(x_smp, p_smp_1d[0, :], line_style+'r'))
+                y_min, y_max = p_smp_1d[:n_smp,:].min(), p_smp_1d[:n_smp,:].max()
+                y_mar = (y_max - y_min) * 0.05
+                ax[i].set_ylim([y_min-y_mar, y_max+y_mar])
+                ax[i].set_ylabel('p')
+                i += 1
+            if dpdt: 
+                lines.append(ax[i].plot(x_smp, dpdt_smp_1d[0, :], line_style+'b'))
+                y_min, y_max = dpdt_smp_1d[:n_smp,:].min(), dpdt_smp_1d[:n_smp,:].max()
+                y_mar = (y_max - y_min) * 0.05
+                ax[i].set_ylim([y_min-y_mar, y_max+y_mar])
+                ax[i].set_ylabel('dp/dt')
+                i += 1
             if d2pdt2:
-                lines[j][0].set_ydata(d2pdt2_smp[i,:])
+                lines.append(ax[i].plot(x_smp, d2pdt2_smp_1d[0, :], line_style+'k'))
+                y_min, y_max = d2pdt2_smp_1d[:n_smp,:].min(), d2pdt2_smp_1d[:n_smp,:].max()
+                y_mar = (y_max - y_min) * 0.05
+                ax[i].set_ylim([y_min-y_mar, y_max+y_mar])
+                ax[i].set_ylabel('d2p/dt2')
+                i += 1
+            
+            ax[0].set_title(f"t = {t_smp[0]:.3e}")
+            plt.show()
 
-            ax[0].set_title(f"t = {t_smp[i]:.3e}")
-            plt.pause(0.050)
+            for i in range(1, n_smp):
+                j = 0
+                
+                if p:
+                    lines[j][0].set_ydata(p_smp_1d[i,:])
+                    j += 1
+                if dpdt:
+                    lines[j][0].set_ydata(dpdt_smp_1d[i,:])
+                    j += 1
+                if d2pdt2:
+                    lines[j][0].set_ydata(d2pdt2_smp_1d[i,:])
 
-    figname = ("animation (1D) "
-              f"[degree={element_degree}]"
-              f"[space-time={space_time_refinement}]"
-              f"[extra-time={extra_time_refinement}]"
-              f"[k={k}]")
+                ax[0].set_title(f"t = {t_smp[i]:.3e}")
+                plt.pause(0.050)
 
-    animate_1d(d2pdt2=True, figname=figname)
+        figname = ("animation-2D "
+                f"[degree={element_degree}]"
+                f"[space-time={space_time_refinement}]"
+                f"[extra-time={extra_time_refinement}]"
+                f"[k={k}]")
+
+        def animate_2d(figname=figname, n_smp=i_smp+1):
+
+            assert n_smp <= t_smp.size
+
+            plt.close(figname)
+
+            fig, ax = plt.subplots(1, 1, num=figname, tight_layout=True)
+            
+            fun = p.copy(deepcopy=True)
+
+            for i in range(n_smp):
+                ax.clear()
+                ax.set_title(f"p({t_smp[i]:.3e})")
+                ax.set_ylabel('y')
+                ax.set_xlabel('x')
+                
+                fun.vector()[:] = p_smp_2d[i]
+                plot(fun)
+                plt.show()
+                plt.pause(0.100)
+
+    else:
+        def animate_1d(*args, **kwargs):
+            raise NotImplementedError("animate_1d")
+
+        def animate_2d(*args, **kwargs):
+            raise NotImplementedError("animate_2d")
+
+    if with_animation_1d:
+        animate_1d()
+
+    if with_animation_2d:
+        animate_2d()
