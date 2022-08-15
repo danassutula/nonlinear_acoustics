@@ -10,7 +10,7 @@ C1 = 1
 C2 = δ / c^2 / T 
 C3 = β / c^2 / ρ
 C4 = T^2
-C5 = b T
+C5 = d T
 
 and 
 
@@ -18,7 +18,8 @@ c - Speed of sound (constant) [m/s]
 T - Time scaling constant (optional)
 δ - Diffusivity of sound [m^2/s]
 ρ - Density of medium [kg/m^3]
-β - Coefficient of nonlinearity [-]
+β - Nonlinearity coefficient [-]
+d - Damping coefficient [1/s]
 
 Reference paper
 Karamalis, A., Wein, W., Navab, N. (2010). Fast Ultrasound Image Simulation 
@@ -60,8 +61,8 @@ if __name__ == "__main__":
         c = 1.0 # Speed of sound [m/s]
         ρ = 1.0 # Density of medium [kg/m^3]
         δ = 0.0 # Diffusivity of sound [m^2/s]
-        β = 0.0 # Coefficient of nonlinearity [-]
-        b = 0.0 # Damping coefficient
+        β = 0.0 # Nonlinearity coefficient [-]
+        d = 0.0 # Damping coefficient [1/s]
 
         if 1:
             β = 1e-4 # Scaled upto instability
@@ -73,8 +74,8 @@ if __name__ == "__main__":
         c = 1500.0 # Speed of sound [m/s]
         ρ = 1100.0 # Density of medium [kg/m^3]
         δ = 4.5e-6 # Diffusivity of sound [m^2/s] (NOTE: An imperceivable effect)
-        β = 6.0    # Coefficient of nonlinearity [-]
-        b = 0.0    # Damping coefficient
+        β = 6.0    # Nonlinearity coefficient [-]
+        d = 0.0    # Damping coefficient [1/s]
 
         if 1:
             β = 1e12 # Scaled upto instability
@@ -134,6 +135,8 @@ if __name__ == "__main__":
     boundary_markers = MeshFunction('size_t', mesh, DIM-1)
     boundary_ids = tuple(range(len(boundary_subdomains)))
 
+    boundary_markers.set_all(9000) # Initialization
+
     for i in boundary_ids:
         boundary_subdomains[i].mark(boundary_markers, i)
 
@@ -148,26 +151,26 @@ if __name__ == "__main__":
     # Neumann boundary conditions
     dpdn_bc = Expression('0.0', t=0, degree=0) 
 
-    # test_case = 0 # 'all_edges_fixed'
-    # test_case = 1 # 'bottom_top_edges_fixed_and_left_right_edges_zero_neumann' 
-    # test_case = 2 # 'left_edge_fixed'
-    test_case = 3 # 'all_edges_free'
+    boundary_conditions_id = 3
 
-    if test_case == 0:
-        dirichlet_boundary_ids = (0, 1, 2, 3)
-    elif test_case == 1:
-        dirichlet_boundary_ids = (0, 2)
-    elif test_case == 2:
-        dirichlet_boundary_ids = (3,)
-    elif test_case == 3:
-        dirichlet_boundary_ids = ()
+    if boundary_conditions_id == 0:
+        dirichlet_boundary_ids = (0, 1, 2, 3) # 0 - all edges fixed
+    elif boundary_conditions_id == 1:
+        dirichlet_boundary_ids = (0, 2)       # 1 - bottom and top edges fixed
+    elif boundary_conditions_id == 2:
+        dirichlet_boundary_ids = (1,)         # 2 - right edge fixed
+    elif boundary_conditions_id == 3:
+        dirichlet_boundary_ids = ()           # 3 - all edges free
     else:
         raise NotImplementedError
     
     neumann_boundary_ids = tuple(set(boundary_ids).difference(dirichlet_boundary_ids))
-    ds = ds(subdomain_id=neumann_boundary_ids, domain=mesh, subdomain_data=boundary_markers) 
+    source_boundary_ids = (3,) # left boundary
 
-    ds_source = ds(subdomain_id=(3,)) 
+    assert all(i in neumann_boundary_ids for i in source_boundary_ids)
+
+    ds_neumann = ds(subdomain_id=neumann_boundary_ids, domain=mesh, subdomain_data=boundary_markers) 
+    ds_source = ds(subdomain_id=source_boundary_ids, domain=mesh, subdomain_data=boundary_markers) 
     
     source_function_id = 1
 
@@ -223,12 +226,12 @@ if __name__ == "__main__":
     C2 = Constant(δ / (c**2 * T))
     C3 = Constant(β / (c**2 * ρ))
     C4 = Constant(T**2)
-    C5 = Constant(b*T)
+    C5 = Constant(d*T)
 
     v = TestFunction(V)
 
     # Weak form
-    F_k = (C0 * dpdn_bc * v * ds
+    F_k = (C0 * dpdn_bc * v * ds_neumann
          - C0 * inner(grad(p_k), grad(v)) * dx
          - C5 * dpdt_k * v * dx
          - C1 * d2pdt2_k * v * dx
@@ -324,7 +327,7 @@ if __name__ == "__main__":
             print(f"[{int(i/nt*100):3}% ]")
 
         if np.isnan(d2pdt2.vector()[0]):
-            print("DIVERGED")
+            print("SOLUTION DIVERGED")
             n_smp = i_smp + 1
             break
 
